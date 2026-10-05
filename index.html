@@ -163,6 +163,9 @@ footer{text-align:center;font-size:11px;color:var(--muted-2);margin:22px 0 8px;l
 .logrow{display:flex;gap:12px;padding:9px 0;border-bottom:1px solid var(--line-2);font-size:13px}
 .logrow:last-child{border-bottom:0}
 .logd{font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--muted);flex:none;min-width:64px}
+.trtools{display:flex;justify-content:flex-end;margin-bottom:4px}
+.mname.grp{margin:14px 0 2px}
+.mname.grp:first-of-type{margin-top:4px}
 
 @media (max-width:720px){
   .stats{grid-template-columns:repeat(2,1fr)}
@@ -700,6 +703,14 @@ function trainState(){
 }
 function trainSave(st){ try { localStorage.setItem(trainKey(), JSON.stringify(st)); } catch(e){} }
 
+/* sekcie: nový tvar training.sections[{title, sub, items:[{n,s,t,nove,g}]}],
+   starý plochý zoznam training.exercises sa zobrazí ako jedna sekcia */
+function trainSections(TR){
+  if (TR && TR.sections && TR.sections.length) return TR.sections;
+  if (TR && TR.exercises && TR.exercises.length) return [{title:"Cviky", items:TR.exercises, legacy:true}];
+  return [];
+}
+
 function renderTrain(){
   var host = document.getElementById("panel-train");
   var TR = DATA.training;
@@ -718,7 +729,8 @@ function renderTrain(){
       }).join("") + '</div></details>'
     : '';
 
-  if (!TR || !TR.exercises || !TR.exercises.length){
+  var secs = trainSections(TR);
+  if (!secs.length){
     host.innerHTML = '<section class="card"><h2>Tréning</h2>' +
       '<p class="caption">Zatiaľ tu nie je žiadny plán. Napíš Claudovi v projekte a doplní ho sem.</p>' +
       '</section>' + logCard;
@@ -730,20 +742,34 @@ function renderTrain(){
     '</div>' + (TR.note ? '<p class="caption">' + esc(TR.note) + '</p>' : '') + '</section>';
 
   var ts = trainState();
-  var ndone = TR.exercises.filter(function(x, i){ return ts["e" + i]; }).length;
 
-  var plan = '<section class="card"><div class="headrow" style="align-items:center;margin-bottom:10px">' +
-    '<h2 style="margin:0">Cviky</h2>' +
-    '<span class="exdone" id="ex-count">' + ndone + ' / ' + TR.exercises.length + '</span>' +
-    '<button class="btn" id="ex-reset" type="button">Reset</button></div>' +
-    TR.exercises.map(function(x, i){
-      var id = "e" + i;
-      return '<div class="ex' + (ts[id] ? ' done' : '') + '" data-id="' + id + '">' +
+  var plan = secs.map(function(sec, si){
+    var items = sec.items || [];
+    var pref = sec.legacy ? "e" : "s" + si + ":";
+    var ndone = 0, body = "", buf = "", cur = null;
+    function flush(){ if (buf){ body += '<div>' + buf + '</div>'; buf = ""; } }
+    items.forEach(function(x, i){
+      var id = pref + i;
+      if (ts[id]) ndone++;
+      var g = x.g || "";
+      if (g !== cur){
+        flush(); cur = g;
+        if (g) body += '<div class="mname grp">' + esc(g) + '</div>';
+      }
+      buf += '<div class="ex' + (ts[id] ? ' done' : '') + '" data-id="' + id + '">' +
         '<span class="box">' + icon("check", 12, "#0E0E0F") + '</span><div>' +
         '<div class="exn">' + esc(x.n) + (x.nove ? '<span class="new">nové</span>' : '') + '</div>' +
         (x.t ? '<div class="ext">' + esc(x.t) + '</div>' : '') +
         '</div><div class="exs">' + esc(x.s || "") + '</div></div>';
-    }).join("") + '</section>';
+    });
+    flush();
+    return '<details class="card daycard trsec" data-pref="' + pref + '">' +
+      '<summary><span class="daytitle">' + esc(sec.title || "Tréning") + '</span>' +
+      (sec.sub ? '<span class="daysub">' + esc(sec.sub) + '</span>' : '') +
+      '<span class="daykcal" data-cnt>' + ndone + ' / ' + items.length + '</span></summary>' +
+      '<div class="dbody"><div class="trtools"><button class="btn" data-reset type="button">Reset</button></div>' +
+      body + '</div></details>';
+  }).join("");
 
   var rules = (TR.rules && TR.rules.length)
     ? '<section class="card"><h2>Zásady</h2><ul class="ul">' +
@@ -752,25 +778,27 @@ function renderTrain(){
 
   host.innerHTML = head + plan + rules + logCard;
 
-  var cnt = document.getElementById("ex-count");
-  function refreshCount(){
-    var n = host.querySelectorAll(".ex.done").length;
-    if (cnt) cnt.textContent = n + " / " + TR.exercises.length;
-  }
-  host.querySelectorAll(".ex").forEach(function(row){
-    row.addEventListener("click", function(){
-      var id = row.getAttribute("data-id"), s2 = trainState();
-      if (s2[id]) delete s2[id]; else s2[id] = 1;
-      trainSave(s2);
-      row.classList.toggle("done");
-      refreshCount();
+  host.querySelectorAll(".trsec").forEach(function(card){
+    var pref = card.getAttribute("data-pref");
+    var cnt = card.querySelector("[data-cnt]");
+    var total = card.querySelectorAll(".ex").length;
+    function refresh(){ cnt.textContent = card.querySelectorAll(".ex.done").length + " / " + total; }
+    card.querySelectorAll(".ex").forEach(function(row){
+      row.addEventListener("click", function(){
+        var id = row.getAttribute("data-id"), s2 = trainState();
+        if (s2[id]) delete s2[id]; else s2[id] = 1;
+        trainSave(s2);
+        row.classList.toggle("done");
+        refresh();
+      });
     });
-  });
-  var rb = document.getElementById("ex-reset");
-  if (rb) rb.addEventListener("click", function(){
-    trainSave({});
-    host.querySelectorAll(".ex.done").forEach(function(r){ r.classList.remove("done"); });
-    refreshCount();
+    card.querySelector("[data-reset]").addEventListener("click", function(){
+      var s2 = trainState();
+      Object.keys(s2).forEach(function(k){ if (k.indexOf(pref) === 0) delete s2[k]; });
+      trainSave(s2);
+      card.querySelectorAll(".ex.done").forEach(function(r){ r.classList.remove("done"); });
+      refresh();
+    });
   });
 }
 
